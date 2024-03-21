@@ -1,5 +1,3 @@
- # S T I T C H <sub><sup>&nbsp;&nbsp;&nbsp;*Self-contained executables made easy*</sup></sub>
-
 <img align="right" height="120" src="https://user-images.githubusercontent.com/34946442/232327201-294224c2-8502-423b-b2cb-663ca88ccfc1.png">
 
 <img src="https://user-images.githubusercontent.com/34946442/230613201-60de5adc-6304-4f18-84d9-d36bb46fdc1f.svg" width="24" height="24">&nbsp;
@@ -8,13 +6,13 @@
 
 Stitch is a tool and library for Zig and C for adding and retrieving resources to and from executables.
 
-Why not just use `@embed` / `#embed`? Stitch serves a different purpose, namely to let build systems, and *users* of your software, create self-contained executables.
+Why not just use `@embedFile` / `#embed`? Stitch serves a different purpose, namely to let build systems, and *users* of your software, create self-contained executables.
 
 For example, instead of requiring users to install an interpreter and execute `mylisp fib.lisp`, they can simply run `./fib` or `fib.exe`
 
-Resoures can be anything, such as scripts, images, text, templates config files, other executables, and so on.
+Resoures can be anything, such as scripts, images, text, templates config files and other executables.
 
-## Use case examples
+## Some use cases
 * Self extracting tools, like an installer
 * Create executables for scripts written in your interpreted programming language
 * Include a sample config file, which is extracted on first run. The user can then edit this.
