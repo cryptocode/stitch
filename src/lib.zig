@@ -134,16 +134,16 @@ pub fn initWriter(allocator: std.mem.Allocator, input_executable_path: []const u
     session.* = .{
         .arena = std.heap.ArenaAllocator.init(allocator),
     };
-    var arena_allocator = session.arena.allocator();
+    const arena_allocator = session.arena.allocator();
     errdefer session.arena.deinit();
 
-    var absolute_input_path = std.fs.realpathAlloc(arena_allocator, input_executable_path) catch return StitchError.CouldNotOpenInputFile;
+    const absolute_input_path = std.fs.realpathAlloc(arena_allocator, input_executable_path) catch return StitchError.CouldNotOpenInputFile;
     session.org_exe_file = std.fs.openFileAbsolute(absolute_input_path, .{ .mode = .read_write }) catch return StitchError.CouldNotOpenInputFile;
 
     // Output path does not need to exists; since we use cwd().createFile, path doesn't need to be absolute
     // We still attempt realpath to detect if we're stitching on the original
-    var absolute_output_path = realpathOrOriginal(arena_allocator, output_executable_path) catch return StitchError.CouldNotOpenOutputFile;
-    var stitch_to_original = std.mem.eql(u8, absolute_input_path, absolute_output_path);
+    const absolute_output_path = realpathOrOriginal(arena_allocator, output_executable_path) catch return StitchError.CouldNotOpenOutputFile;
+    const stitch_to_original = std.mem.eql(u8, absolute_input_path, absolute_output_path);
 
     if (!stitch_to_original) {
         session.output_exe_file = std.fs.cwd().createFile(absolute_output_path, .{ .exclusive = true, .truncate = false }) catch |err| switch (err) {
@@ -235,7 +235,7 @@ pub const StitchWriter = struct {
                 writer.session.diagnostics = .{ .IoError = "Unable to commit resources to output file" };
                 return StitchError.IoError;
             }
-            return @as(StitchError, @errSetCast(err));
+            return @as(StitchError, @errorCast(err));
         };
     }
 
@@ -259,16 +259,16 @@ pub const StitchWriter = struct {
 
         // No resources = write empty tail
         if (writer.exe.resources.items.len == 0) {
-            try stream.writeIntBig(u64, 0);
+            try stream.writeInt(u64, 0, .big);
             try stream.writeByte(StitchVersion);
-            try stream.writeIntBig(u64, EofMagic);
+            try stream.writeInt(u64, EofMagic, .big);
             try buffered_writer.flush();
             return;
         }
 
         // This is zero if we're writing not stitching to the original.
         // In that case, we set this when we know the length of the first input (which must be the executable)
-        var exe_file_len = try outfile.getEndPos();
+        const exe_file_len = try outfile.getEndPos();
 
         // Keeps track of offsets relative to the end of th original executable
         // This is used to compute resource indices
@@ -279,7 +279,7 @@ pub const StitchWriter = struct {
         // Append resources, each prefixed with resource magic
         for (writer.exe.resources.items) |*item| {
             const written_before = counting_writer.bytes_written;
-            try stream.writeIntBig(u64, ResourceMagic);
+            try stream.writeInt(u64, ResourceMagic, .big);
             switch (item.data) {
                 .bytes => {
                     try stream.writeAll(item.data.bytes);
@@ -306,20 +306,20 @@ pub const StitchWriter = struct {
         const index_offset = exe_file_len + counting_writer.bytes_written;
 
         // Write the index
-        try stream.writeIntBig(u64, writer.exe.index.entries.items.len);
+        try stream.writeInt(u64, writer.exe.index.entries.items.len, .big);
         for (writer.exe.index.entries.items, 0..) |*entry, i| {
-            try stream.writeIntBig(u64, entry.name.len);
+            try stream.writeInt(u64, entry.name.len, .big);
             try stream.writeAll(entry.name);
             try stream.writeByte(entry.resource_type);
-            try stream.writeIntBig(u64, resource_offsets.items[i]);
-            try stream.writeIntBig(u64, resource_lengths.items[i]);
+            try stream.writeInt(u64, resource_offsets.items[i], .big);
+            try stream.writeInt(u64, resource_lengths.items[i], .big);
             try stream.writeAll(&entry.scratch_bytes);
         }
 
         // Write the tail
-        try stream.writeIntBig(u64, index_offset);
+        try stream.writeInt(u64, index_offset, .big);
         try stream.writeByte(StitchVersion);
-        try stream.writeIntBig(u64, EofMagic);
+        try stream.writeInt(u64, EofMagic, .big);
         try buffered_writer.flush();
     }
 
@@ -462,9 +462,9 @@ pub const StitchReader = struct {
         // Read the tail
         try reader.session.org_exe_file.seekFromEnd(-17);
         var in = reader.session.org_exe_file.reader();
-        var index_offset = try in.readIntBig(u64);
+        const index_offset = try in.readInt(u64, .big);
         reader.exe.tail.version = try in.readByte();
-        reader.exe.tail.eof_magic = try in.readIntBig(u64);
+        reader.exe.tail.eof_magic = try in.readInt(u64, .big);
         if (reader.exe.tail.eof_magic != EofMagic) {
             reader.session.diagnostics = .{ .InvalidExecutableFormat = "Invalid stitch EOF magic" };
             return StitchError.InvalidExecutableFormat;
@@ -476,20 +476,20 @@ pub const StitchReader = struct {
         // Seek to the index, and read it
         var ally = reader.session.arena.allocator();
         try reader.session.org_exe_file.seekTo(index_offset);
-        var entry_count = try in.readIntBig(u64);
+        const entry_count = try in.readInt(u64, .big);
         for (0..entry_count) |_| {
-            const name_len = try in.readIntBig(u64);
+            const name_len = try in.readInt(u64, .big);
             const name: []const u8 = _: {
                 if (name_len == 0) break :_ "";
-                var buffer = try ally.alloc(u8, name_len);
+                const buffer = try ally.alloc(u8, name_len);
                 _ = try in.readAll(buffer);
                 break :_ buffer;
             };
             const resource_type = try in.readByte();
-            const resource_offset = try in.readIntBig(u64);
-            const byte_length = try in.readIntBig(u64);
+            const resource_offset = try in.readInt(u64, .big);
+            const byte_length = try in.readInt(u64, .big);
             const scratch_bytes = _: {
-                var buffer = try ally.alloc(u8, 8);
+                const buffer = try ally.alloc(u8, 8);
                 _ = try in.readAll(buffer);
                 break :_ buffer;
             };
@@ -553,7 +553,7 @@ pub const StitchReader = struct {
 
         var file_reader = reader.session.org_exe_file.reader();
 
-        var resource_magic = file_reader.readIntBig(u64) catch {
+        const resource_magic = file_reader.readInt(u64, .big) catch {
             reader.session.diagnostics = .{ .IoError = "Failed to read resource magic" };
             return StitchError.IoError;
         };
@@ -563,7 +563,7 @@ pub const StitchReader = struct {
             return StitchError.InvalidExecutableFormat;
         }
 
-        var buffer = try ally.alloc(u8, length);
+        const buffer = try ally.alloc(u8, length);
         _ = file_reader.readAll(buffer) catch {
             reader.session.diagnostics = .{ .IoError = "Failed to read resource bytes" };
             return StitchError.IoError;
@@ -589,7 +589,7 @@ pub const StitchReader = struct {
             return StitchError.IoError;
         };
         var file_reader = reader.session.org_exe_file.reader();
-        var resource_magic = file_reader.readIntBig(u64) catch {
+        const resource_magic = file_reader.readInt(u64, .big) catch {
             reader.session.diagnostics = .{ .IoError = "Failed to read resource magic" };
             return StitchError.IoError;
         };
@@ -631,12 +631,12 @@ pub fn readEntireFile(session: *Self, path: []const u8) StitchError![]const u8 {
     errdefer {
         session.diagnostics = .{ .IoError = "Failed to read file" };
     }
-    var absolute_path = std.fs.realpathAlloc(arena_allocator, path) catch return StitchError.IoError;
+    const absolute_path = std.fs.realpathAlloc(arena_allocator, path) catch return StitchError.IoError;
     var file = std.fs.openFileAbsolute(absolute_path, .{ .mode = .read_write }) catch return StitchError.IoError;
     defer file.close();
     var reader = file.reader();
-    var file_size = file.getEndPos() catch return StitchError.IoError;
-    var buffer = arena_allocator.alloc(u8, file_size) catch return StitchError.IoError;
+    const file_size = file.getEndPos() catch return StitchError.IoError;
+    const buffer = arena_allocator.alloc(u8, file_size) catch return StitchError.IoError;
     _ = reader.readAll(buffer) catch return StitchError.IoError;
     return buffer;
 }
@@ -693,7 +693,7 @@ pub fn generateUniqueFileName(allocator: std.mem.Allocator) ![]const u8 {
     random.bytes(&output);
 
     // Allocate enough for the hex string, plus the ".tmp" suffix
-    var buf = try allocator.alloc(u8, output.len * 2 + 4);
+    const buf = try allocator.alloc(u8, output.len * 2 + 4);
     return std.fmt.bufPrint(buf, "{s}.tmp", .{std.fmt.fmtSliceHexLower(&output)});
 }
 
@@ -712,7 +712,7 @@ pub const C_ABI = struct {
             error_code.* = translateError(StitchError.CouldNotOpenInputFile);
             return null;
         }
-        var allocator = if (builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator;
+        const allocator = if (builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator;
         const writer = initWriter(allocator, std.mem.span(input_executable_path.?), if (output_executable_path) |path| std.mem.span(path) else std.mem.span(input_executable_path.?)) catch |err| {
             error_code.* = translateError(err);
             return null;
@@ -726,7 +726,7 @@ pub const C_ABI = struct {
             error_code.* = translateError(StitchError.CouldNotOpenInputFile);
             return null;
         }
-        var allocator = if (builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator;
+        const allocator = if (builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator;
         const reader = initReader(allocator, if (executable_path) |p| std.mem.span(p) else null) catch |err| {
             error_code.* = translateError(err);
             return null;
@@ -761,7 +761,7 @@ pub const C_ABI = struct {
     }
 
     pub export fn stitch_reader_get_resource_bytes(reader: *anyopaque, resource_index: u64, error_code: *u64) callconv(.C) ?[*]const u8 {
-        var slice = fromC(reader).rw.reader.getResourceAsSlice(resource_index) catch |err| {
+        const slice = fromC(reader).rw.reader.getResourceAsSlice(resource_index) catch |err| {
             error_code.* = translateError(err);
             return null;
         };
@@ -770,7 +770,7 @@ pub const C_ABI = struct {
 
     pub export fn stitch_reader_get_scratch_bytes(reader: *anyopaque, resource_index: u64, error_code: *u64) callconv(.C) ?[*]const u8 {
         error_code.* = 0;
-        var slice = fromC(reader).rw.reader.getScratchBytes(resource_index) catch |err| {
+        const slice = fromC(reader).rw.reader.getScratchBytes(resource_index) catch |err| {
             error_code.* = translateError(err);
             return null;
         };
@@ -804,7 +804,7 @@ pub const C_ABI = struct {
     }
 
     pub export fn stitch_read_entire_file(reader_or_writer: *anyopaque, path: [*:0]const u8, error_code: *u64) callconv(.C) ?[*]const u8 {
-        var s = fromC(reader_or_writer);
+        const s = fromC(reader_or_writer);
         switch (s.rw) {
             inline else => |rw| {
                 const slice = rw.session.readEntireFile(std.mem.span(path)) catch |err| {
@@ -821,7 +821,7 @@ pub const C_ABI = struct {
         if (session == null) return "Could not get diagnostic: Invalid session";
         var s = fromC(session.?);
         if (s.getDiagnostics()) |d| {
-            var str = d.toOwnedString(s.arena.allocator()) catch return null;
+            const str = d.toOwnedString(s.arena.allocator()) catch return null;
             return s.arena.allocator().dupeZ(u8, str) catch return null;
         } else return null;
     }

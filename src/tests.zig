@@ -7,7 +7,7 @@ test "write to new file, but it exists" {
     try Stitch.testSetup();
     defer Stitch.testTeardown();
 
-    var allocator = std.heap.page_allocator;
+    const allocator = std.heap.page_allocator;
     try std.testing.expectError(error.OutputFileAlreadyExists, Stitch.initWriter(allocator, ".stitch/one.txt", ".stitch/two.txt"));
 }
 
@@ -17,10 +17,10 @@ test "append resources to new file and read them back" {
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-    var allocator = arena.allocator();
+    const allocator = arena.allocator();
 
     // Create a temporary file, with a random name, and delete it when we're done.
-    var random_name = try Stitch.generateUniqueFileName(arena.allocator());
+    const random_name = try Stitch.generateUniqueFileName(arena.allocator());
     defer std.fs.cwd().deleteFile(random_name) catch unreachable;
 
     // Create stitch file
@@ -28,7 +28,7 @@ test "append resources to new file and read them back" {
         var writer = try Stitch.initWriter(allocator, ".stitch/executable", random_name);
         defer writer.deinit();
         _ = try writer.addResourceFromPath("one", ".stitch/one.txt");
-        var index = try writer.addResourceFromPath(null, ".stitch/two.txt");
+        const index = try writer.addResourceFromPath(null, ".stitch/two.txt");
         try writer.setScratchBytes(index, [8]u8{ 0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00 });
 
         var file = try std.fs.cwd().openFile(".stitch/three.txt", .{});
@@ -49,8 +49,8 @@ test "append resources to new file and read them back" {
         var data = try reader.getResourceAsSlice(0);
         try std.testing.expectEqualSlices(u8, data, "Hello world");
 
-        var two_index = try reader.getResourceIndex("two.txt");
-        var scratch_bytes = try reader.getScratchBytes(two_index);
+        const two_index = try reader.getResourceIndex("two.txt");
+        const scratch_bytes = try reader.getScratchBytes(two_index);
         try std.testing.expectEqualSlices(u8, scratch_bytes, &[8]u8{ 0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00 });
 
         // Test reading a resource through a reader
@@ -68,12 +68,12 @@ test "write executable with no resources" {
     defer arena.deinit();
 
     // Create a temporary file, with a random name, and delete it when we're done.
-    var random_name = try Stitch.generateUniqueFileName(arena.allocator());
+    const random_name = try Stitch.generateUniqueFileName(arena.allocator());
     defer std.fs.cwd().deleteFile(random_name) catch unreachable;
 
     // Create stitch file
     {
-        var allocator = std.heap.page_allocator;
+        const allocator = std.heap.page_allocator;
         var writer = try Stitch.initWriter(allocator, ".stitch/one.txt", random_name);
         defer writer.deinit();
         try writer.commit();
@@ -92,7 +92,7 @@ test "write executable with no resources" {
         var reader = try Stitch.initReader(arena.allocator(), random_name);
         defer reader.deinit();
 
-        var content = try reader.session.readEntireFile(".stitch/one.txt");
+        const content = try reader.session.readEntireFile(".stitch/one.txt");
         try std.testing.expectEqualSlices(u8, content, "Hello world");
         try std.testing.expect((try reader.session.getSelfPath()).len > 0);
     }
@@ -107,7 +107,7 @@ test "read invalid exe, too small" {
 
     // Input file too small
     {
-        var random_name = try Stitch.generateUniqueFileName(arena.allocator());
+        const random_name = try Stitch.generateUniqueFileName(arena.allocator());
         defer std.fs.cwd().deleteFile(random_name) catch unreachable;
 
         {
@@ -120,7 +120,7 @@ test "read invalid exe, too small" {
 
     // Bad magic
     {
-        var random_name = try Stitch.generateUniqueFileName(arena.allocator());
+        const random_name = try Stitch.generateUniqueFileName(arena.allocator());
         defer std.fs.cwd().deleteFile(random_name) catch unreachable;
 
         {
