@@ -59,6 +59,7 @@ pub const Cmdline = struct {
         \\    stitch <executable> <resource>... [--output <output>]
         \\    stitch <executable> <name>=<resource>... [--output <output>]
         \\    stitch --version
+        \\    stitch --help
         \\
     ;
 
@@ -67,6 +68,12 @@ pub const Cmdline = struct {
 
     // If not specified, the output file will be the same as the first input file
     output_file_path: []const u8 = "",
+
+    /// Print usage
+    fn usage() noreturn {
+        std.io.getStdErr().writer().print(help, .{}) catch unreachable;
+        std.process.exit(0);
+    }
 
     /// Loop through arguments and extract input files and output name
     /// The first input file is the binary onto which the rest of the files are stitched.
@@ -83,12 +90,10 @@ pub const Cmdline = struct {
         while (arg_it.next()) |arg| {
             if (std.mem.startsWith(u8, arg, "--") and !std.mem.eql(u8, arg, "--output") and !std.mem.eql(u8, arg, "--version") and !std.mem.eql(u8, arg, "--help")) {
                 try std.io.getStdErr().writer().print("Unknown argument: {s}\n\n", .{arg});
-                try std.io.getStdErr().writer().print(help, .{});
-                std.process.exit(0);
+                usage();
             }
             if (std.mem.eql(u8, arg, "--help")) {
-                try std.io.getStdErr().writer().print(help, .{});
-                std.process.exit(0);
+                usage();
             }
             if (std.mem.eql(u8, arg, "--version")) {
                 // Format version determines the major version number
@@ -100,7 +105,7 @@ pub const Cmdline = struct {
                     cmdline.output_file_path = output;
                     if (arg_it.next() != null) {
                         try std.io.getStdErr().writer().print("The last argument must be --output <filename>", .{});
-                        std.process.exit(0);
+                        usage();
                     }
                     break;
                 }
@@ -119,8 +124,7 @@ pub const Cmdline = struct {
 
         if (cmdline.input_files_paths.count() < 2) {
             try std.io.getStdErr().writer().print("At least two input files are required\n", .{});
-            try std.io.getStdErr().writer().print(help, .{});
-            std.process.exit(0);
+            usage();
         }
 
         if (cmdline.output_file_path.len == 0) {
