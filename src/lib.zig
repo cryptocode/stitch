@@ -686,9 +686,9 @@ pub fn testTeardown() void {
 // Create a cryptographically unique filename; mostly useful for test purposes
 pub fn generateUniqueFileName(allocator: std.mem.Allocator) ![]const u8 {
     var output: [16]u8 = undefined;
-    var secret_seed: [std.rand.DefaultCsprng.secret_seed_length]u8 = undefined;
+    var secret_seed: [std.Random.DefaultCsprng.secret_seed_length]u8 = undefined;
     std.crypto.random.bytes(&secret_seed);
-    var csprng = std.rand.DefaultCsprng.init(secret_seed);
+    var csprng = std.Random.DefaultCsprng.init(secret_seed);
     const random = csprng.random();
     random.bytes(&output);
 

@@ -19,7 +19,8 @@ Resoures can be anything, such as scripts, images, text, templates config files 
 * An image in your own format that's able to display itself when executed
 
 ## Building the project
-*Last tested with Zig version 0.12.0-dev.3161+377ecc6af*
+To build with Zig 0.13, use the `zig-<version>` tag/release.
+To build with Zig master, use the main branch (last tested with Zig 0.14.0-dev.130+cb308ba3a)
 
 `zig build` will put a `bin` and `lib` directory in your output folder (e.g. zig-out)
 

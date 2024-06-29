@@ -111,7 +111,7 @@ pub const Cmdline = struct {
                 }
             } else {
                 // The filename is stored in the index, so it can be found by name. By using name=path, an alternative name can be given
-                var it = std.mem.split(u8, arg, "=");
+                var it = std.mem.splitScalar(u8, arg, '=');
                 var name = it.next();
                 const second = it.next();
                 const path = if (second != null) second.? else name.?;
