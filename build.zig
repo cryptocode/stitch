@@ -5,6 +5,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const stitch_mod = b.addModule("stitch", .{
+        .root_source_file = b.path("src/lib.zig"),
+    });
+
     const lib = b.addStaticLibrary(.{
         .name = "stitch",
         .root_source_file = b.path("src/lib.zig"),
@@ -22,6 +26,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    exe.root_module.addImport("stitch", stitch_mod);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -38,6 +43,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    main_tests.root_module.addImport("stitch", stitch_mod);
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&main_tests.step);

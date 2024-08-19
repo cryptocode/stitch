@@ -1,6 +1,6 @@
 //! The Stitch command line tool
 const std = @import("std");
-const Stitch = @import("lib.zig");
+const Stitch = @import("stitch");
 const StitchError = Stitch.StitchError;
 
 /// The stitch command-line tool, implemented using the stitch library

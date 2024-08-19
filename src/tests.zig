@@ -1,6 +1,6 @@
 //! Stitch test suite
 const std = @import("std");
-const Stitch = @import("lib.zig");
+const Stitch = @import("stitch");
 const StitchError = Stitch.StitchError;
 
 test "write to new file, but it exists" {

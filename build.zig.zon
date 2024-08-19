@@ -1,0 +1,13 @@
+.{
+    .name = "stitch",
+    .version = "0.1.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src/lib.zig",
+        "src/main.zig",
+        "src/tests.zig",
+        "LICENSE",
+        "README.md",
+    },
+}
