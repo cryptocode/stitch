@@ -1,5 +1,5 @@
 .{
-    .name = "stitch",
+    .name = .stitch,
     .version = "0.1.0",
     .paths = .{
         "build.zig",
@@ -10,4 +10,5 @@
         "LICENSE",
         "README.md",
     },
+    .fingerprint = 0x284931c8ceb2fd1e,
 }
