@@ -705,163 +705,160 @@ pub fn generateUniqueFileName(allocator: std.mem.Allocator) ![]const u8 {
 /// To interact with stich from C, a writer or reader session must be created.
 /// All returned data is owned by the session. Copy any data you need to keep after the session is closed,
 /// or keep the session open until you are done with the data.
-pub const C_ABI = struct {
-    pub export fn stitch_init_writer(input_executable_path: ?[*:0]const u8, output_executable_path: ?[*:0]const u8, error_code: *u64) callconv(.C) ?*anyopaque {
-        error_code.* = 0;
-        if (input_executable_path == null) {
-            error_code.* = translateError(StitchError.CouldNotOpenInputFile);
-            return null;
-        }
-        const allocator = if (builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator;
-        const writer = initWriter(allocator, std.mem.span(input_executable_path.?), if (output_executable_path) |path| std.mem.span(path) else std.mem.span(input_executable_path.?)) catch |err| {
-            error_code.* = translateError(err);
-            return null;
-        };
-        return writer.session;
-    }
-
-    pub export fn stitch_init_reader(executable_path: ?[*:0]const u8, error_code: *u64) callconv(.C) ?*anyopaque {
-        error_code.* = 0;
-        if (executable_path == null) {
-            error_code.* = translateError(StitchError.CouldNotOpenInputFile);
-            return null;
-        }
-        const allocator = if (builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator;
-        const reader = initReader(allocator, if (executable_path) |p| std.mem.span(p) else null) catch |err| {
-            error_code.* = translateError(err);
-            return null;
-        };
-        return reader.session;
-    }
-
-    pub export fn stitch_deinit(session: *anyopaque) callconv(.C) void {
-        fromC(session).deinit();
-    }
-
-    pub export fn stitch_reader_get_resource_count(reader: *anyopaque) callconv(.C) u64 {
-        return fromC(reader).rw.reader.getResourceCount();
-    }
-
-    pub export fn stitch_reader_get_format_version(reader: *anyopaque) callconv(.C) u8 {
-        return fromC(reader).rw.reader.getFormatVersion();
-    }
-
-    pub export fn stitch_reader_get_resource_index(reader: *anyopaque, name: [*:0]const u8, error_code: *u64) callconv(.C) u64 {
-        return fromC(reader).rw.reader.getResourceIndex(std.mem.span(name)) catch |err| {
-            error_code.* = translateError(err);
-            return std.math.maxInt(u64);
-        };
-    }
-
-    pub export fn stitch_reader_get_resource_byte_len(reader: *anyopaque, resource_index: u64, error_code: *u64) callconv(.C) u64 {
-        return fromC(reader).rw.reader.getResourceSize(resource_index) catch |err| {
-            error_code.* = translateError(err);
-            return std.math.maxInt(u64);
-        };
-    }
-
-    pub export fn stitch_reader_get_resource_bytes(reader: *anyopaque, resource_index: u64, error_code: *u64) callconv(.C) ?[*]const u8 {
-        const slice = fromC(reader).rw.reader.getResourceAsSlice(resource_index) catch |err| {
-            error_code.* = translateError(err);
-            return null;
-        };
-        return slice.ptr;
-    }
-
-    pub export fn stitch_reader_get_scratch_bytes(reader: *anyopaque, resource_index: u64, error_code: *u64) callconv(.C) ?[*]const u8 {
-        error_code.* = 0;
-        const slice = fromC(reader).rw.reader.getScratchBytes(resource_index) catch |err| {
-            error_code.* = translateError(err);
-            return null;
-        };
-        return slice.ptr;
-    }
-
-    pub export fn stitch_writer_commit(writer: *anyopaque, error_code: *u64) callconv(.C) void {
-        fromC(writer).rw.writer.commit() catch |err| {
-            error_code.* = translateError(err);
-        };
-    }
-
-    pub export fn stitch_writer_add_resource_from_path(writer: *anyopaque, name: [*:0]const u8, path: [*:0]const u8, error_code: *u64) callconv(.C) u64 {
-        return fromC(writer).rw.writer.addResourceFromPath(std.mem.span(name), std.mem.span(path)) catch |err| {
-            error_code.* = translateError(err);
-            return std.math.maxInt(u64);
-        };
-    }
-
-    pub export fn stitch_writer_add_resource_from_bytes(writer: *anyopaque, name: [*:0]const u8, bytes: [*]const u8, len: usize, error_code: *u64) callconv(.C) u64 {
-        return fromC(writer).rw.writer.addResourceFromSlice(std.mem.span(name), bytes[0..len]) catch |err| {
-            error_code.* = translateError(err);
-            return std.math.maxInt(u64);
-        };
-    }
-
-    pub export fn stitch_writer_set_scratch_bytes(writer: *anyopaque, resource_index: u64, bytes: [*]const u8, error_code: *u64) callconv(.C) void {
-        fromC(writer).rw.writer.setScratchBytes(resource_index, bytes[0..8].*) catch |err| {
-            error_code.* = translateError(err);
-        };
-    }
-
-    pub export fn stitch_read_entire_file(reader_or_writer: *anyopaque, path: [*:0]const u8, error_code: *u64) callconv(.C) ?[*]const u8 {
-        const s = fromC(reader_or_writer);
-        switch (s.rw) {
-            inline else => |rw| {
-                const slice = rw.session.readEntireFile(std.mem.span(path)) catch |err| {
-                    error_code.* = translateError(err);
-                    return null;
-                };
-                return slice.ptr;
-            },
-        }
+pub export fn stitch_init_writer(input_executable_path: ?[*:0]const u8, output_executable_path: ?[*:0]const u8, error_code: *u64) callconv(.C) ?*anyopaque {
+    error_code.* = 0;
+    if (input_executable_path == null) {
+        error_code.* = translateError(StitchError.CouldNotOpenInputFile);
         return null;
     }
+    const allocator = if (builtin.link_libc) std.heap.c_allocator else std.heap.smp_allocator;
+    const writer = initWriter(allocator, std.mem.span(input_executable_path.?), if (output_executable_path) |path| std.mem.span(path) else std.mem.span(input_executable_path.?)) catch |err| {
+        error_code.* = translateError(err);
+        return null;
+    };
+    return writer.session;
+}
 
-    pub export fn stitch_get_last_error_diagnostic(session: ?*anyopaque) callconv(.C) ?[*:0]const u8 {
-        if (session == null) return "Could not get diagnostic: Invalid session";
-        var s = fromC(session.?);
-        if (s.getDiagnostics()) |d| {
-            const str = d.toOwnedString(s.arena.allocator()) catch return null;
-            return s.arena.allocator().dupeZ(u8, str) catch return null;
-        } else return null;
+pub export fn stitch_init_reader(executable_path: ?[*:0]const u8, error_code: *u64) callconv(.C) ?*anyopaque {
+    error_code.* = 0;
+    if (executable_path == null) {
+        error_code.* = translateError(StitchError.CouldNotOpenInputFile);
+        return null;
     }
+    const allocator = if (builtin.link_libc) std.heap.c_allocator else std.heap.smp_allocator;
+    const reader = initReader(allocator, if (executable_path) |p| std.mem.span(p) else null) catch |err| {
+        error_code.* = translateError(err);
+        return null;
+    };
+    return reader.session;
+}
 
-    pub export fn stitch_get_error_diagnostic(error_code: u64) callconv(.C) ?[*:0]const u8 {
-        switch (error_code) {
-            2 => return "Output file already exists",
-            3 => return "Could not open input file",
-            4 => return "Could not open output file",
-            5 => return "Invalid executable format",
-            6 => return "Resource not found",
-            7 => return "I/O error",
-            else => return "Unknown error code",
-        }
-    }
+pub export fn stitch_deinit(session: *anyopaque) callconv(.C) void {
+    fromC(session).deinit();
+}
 
-    pub export fn stitch_test_setup() callconv(.C) void {
-        testSetup() catch unreachable;
-    }
+pub export fn stitch_reader_get_resource_count(reader: *anyopaque) callconv(.C) u64 {
+    return fromC(reader).rw.reader.getResourceCount();
+}
 
-    pub export fn stitch_test_teardown() callconv(.C) void {
-        testTeardown();
-    }
+pub export fn stitch_reader_get_format_version(reader: *anyopaque) callconv(.C) u8 {
+    return fromC(reader).rw.reader.getFormatVersion();
+}
 
-    // Convert from a C ABI pointer to a Zig pointer to self
-    fn fromC(session: *anyopaque) *Self {
-        return @ptrCast(@alignCast(session));
-    }
+pub export fn stitch_reader_get_resource_index(reader: *anyopaque, name: [*:0]const u8, error_code: *u64) callconv(.C) u64 {
+    return fromC(reader).rw.reader.getResourceIndex(std.mem.span(name)) catch |err| {
+        error_code.* = translateError(err);
+        return std.math.maxInt(u64);
+    };
+}
 
-    // Map Zig errors to C error codes
-    fn translateError(err: anyerror) u64 {
-        return switch (err) {
-            StitchError.OutputFileAlreadyExists => 2,
-            StitchError.CouldNotOpenInputFile => 3,
-            StitchError.CouldNotOpenOutputFile => 4,
-            StitchError.InvalidExecutableFormat => 5,
-            StitchError.ResourceNotFound => 6,
-            StitchError.IoError => 7,
-            else => 1,
-        };
+pub export fn stitch_reader_get_resource_byte_len(reader: *anyopaque, resource_index: u64, error_code: *u64) callconv(.C) u64 {
+    return fromC(reader).rw.reader.getResourceSize(resource_index) catch |err| {
+        error_code.* = translateError(err);
+        return std.math.maxInt(u64);
+    };
+}
+
+pub export fn stitch_reader_get_resource_bytes(reader: *anyopaque, resource_index: u64, error_code: *u64) callconv(.C) ?[*]const u8 {
+    const slice = fromC(reader).rw.reader.getResourceAsSlice(resource_index) catch |err| {
+        error_code.* = translateError(err);
+        return null;
+    };
+    return slice.ptr;
+}
+
+pub export fn stitch_reader_get_scratch_bytes(reader: *anyopaque, resource_index: u64, error_code: *u64) callconv(.C) ?[*]const u8 {
+    error_code.* = 0;
+    const slice = fromC(reader).rw.reader.getScratchBytes(resource_index) catch |err| {
+        error_code.* = translateError(err);
+        return null;
+    };
+    return slice.ptr;
+}
+
+pub export fn stitch_writer_commit(writer: *anyopaque, error_code: *u64) callconv(.C) void {
+    fromC(writer).rw.writer.commit() catch |err| {
+        error_code.* = translateError(err);
+    };
+}
+
+pub export fn stitch_writer_add_resource_from_path(writer: *anyopaque, name: [*:0]const u8, path: [*:0]const u8, error_code: *u64) callconv(.C) u64 {
+    return fromC(writer).rw.writer.addResourceFromPath(std.mem.span(name), std.mem.span(path)) catch |err| {
+        error_code.* = translateError(err);
+        return std.math.maxInt(u64);
+    };
+}
+
+pub export fn stitch_writer_add_resource_from_bytes(writer: *anyopaque, name: [*:0]const u8, bytes: [*]const u8, len: usize, error_code: *u64) callconv(.C) u64 {
+    return fromC(writer).rw.writer.addResourceFromSlice(std.mem.span(name), bytes[0..len]) catch |err| {
+        error_code.* = translateError(err);
+        return std.math.maxInt(u64);
+    };
+}
+
+pub export fn stitch_writer_set_scratch_bytes(writer: *anyopaque, resource_index: u64, bytes: [*]const u8, error_code: *u64) callconv(.C) void {
+    fromC(writer).rw.writer.setScratchBytes(resource_index, bytes[0..8].*) catch |err| {
+        error_code.* = translateError(err);
+    };
+}
+
+pub export fn stitch_read_entire_file(reader_or_writer: *anyopaque, path: [*:0]const u8, error_code: *u64) callconv(.C) ?[*]const u8 {
+    const s = fromC(reader_or_writer);
+    switch (s.rw) {
+        inline else => |rw| {
+            const slice = rw.session.readEntireFile(std.mem.span(path)) catch |err| {
+                error_code.* = translateError(err);
+                return null;
+            };
+            return slice.ptr;
+        },
     }
-};
-usingnamespace C_ABI;
+    return null;
+}
+
+pub export fn stitch_get_last_error_diagnostic(session: ?*anyopaque) callconv(.C) ?[*:0]const u8 {
+    if (session == null) return "Could not get diagnostic: Invalid session";
+    var s = fromC(session.?);
+    if (s.getDiagnostics()) |d| {
+        const str = d.toOwnedString(s.arena.allocator()) catch return null;
+        return s.arena.allocator().dupeZ(u8, str) catch return null;
+    } else return null;
+}
+
+pub export fn stitch_get_error_diagnostic(error_code: u64) callconv(.C) ?[*:0]const u8 {
+    switch (error_code) {
+        2 => return "Output file already exists",
+        3 => return "Could not open input file",
+        4 => return "Could not open output file",
+        5 => return "Invalid executable format",
+        6 => return "Resource not found",
+        7 => return "I/O error",
+        else => return "Unknown error code",
+    }
+}
+
+pub export fn stitch_test_setup() callconv(.C) void {
+    testSetup() catch unreachable;
+}
+
+pub export fn stitch_test_teardown() callconv(.C) void {
+    testTeardown();
+}
+
+// Convert from a C ABI pointer to a Zig pointer to self
+fn fromC(session: *anyopaque) *Self {
+    return @ptrCast(@alignCast(session));
+}
+
+// Map Zig errors to C error codes
+fn translateError(err: anyerror) u64 {
+    return switch (err) {
+        StitchError.OutputFileAlreadyExists => 2,
+        StitchError.CouldNotOpenInputFile => 3,
+        StitchError.CouldNotOpenOutputFile => 4,
+        StitchError.InvalidExecutableFormat => 5,
+        StitchError.ResourceNotFound => 6,
+        StitchError.IoError => 7,
+        else => 1,
+    };
+}

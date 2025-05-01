@@ -20,7 +20,7 @@ Resoures can be anything, such as scripts, images, text, templates config files 
 
 ## Building the project
 To build with Zig 0.13, use the `zig-<version>` tag/release.
-To build with Zig 0.14 or master, use the main branch (last tested with Zig version `0.14.0-dev.3470+711b0fef5`)
+To build with Zig 0.14 or master, use the main branch (last tested with Zig version `0.15.0-dev.11+5c57e90ff`)
 
 `zig build` will put a `bin` and `lib` directory in your output folder (e.g. zig-out)
 

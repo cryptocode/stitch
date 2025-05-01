@@ -131,11 +131,3 @@ test "read invalid exe, too small" {
         try std.testing.expectError(StitchError.InvalidExecutableFormat, Stitch.initReader(arena.allocator(), random_name));
     }
 }
-
-test {
-    std.testing.refAllDecls(@This());
-    std.testing.refAllDecls(Stitch.StitchReader);
-    std.testing.refAllDecls(Stitch.StitchResourceReader);
-    std.testing.refAllDecls(Stitch.StitchWriter);
-    std.testing.refAllDecls(Stitch.C_ABI);
-}
