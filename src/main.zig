@@ -5,6 +5,8 @@ const StitchError = Stitch.StitchError;
 
 /// The stitch command-line tool, implemented using the stitch library
 pub fn main() !u8 {
+    StdWriters.initIdempotent();
+
     var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer _ = gpa.deinit();
     const backing_allocator = gpa.allocator();
@@ -18,7 +20,7 @@ pub fn main() !u8 {
     var stitcher = Stitch.initWriter(backing_allocator, cmdline.input_files_paths.values()[0], cmdline.output_file_path) catch |err| {
         switch (err) {
             StitchError.OutputFileAlreadyExists => {
-                try std.io.getStdErr().writer().print("Output file already exists: {s}\n", .{cmdline.output_file_path});
+                try StdWriters.err_writer.print("Output file already exists: {s}\n", .{cmdline.output_file_path});
                 return 1;
             },
             else => return err,
@@ -36,7 +38,7 @@ pub fn main() !u8 {
         if (stitcher.session.getDiagnostics()) |diagnostics| {
             try diagnostics.print(stitcher.session.arena.allocator());
         } else {
-            try std.io.getStdErr().writer().print("Error: {s}\n", .{@errorName(err)});
+            try StdWriters.err_writer.print("Error: {s}\n", .{@errorName(err)});
         }
     };
 
@@ -71,7 +73,8 @@ pub const Cmdline = struct {
 
     /// Print usage
     fn usage() noreturn {
-        std.io.getStdErr().writer().print(help, .{}) catch unreachable;
+        StdWriters.out_writer.print(help, .{}) catch unreachable;
+        StdWriters.out_writer.flush() catch unreachable;
         std.process.exit(0);
     }
 
@@ -89,7 +92,7 @@ pub const Cmdline = struct {
 
         while (arg_it.next()) |arg| {
             if (std.mem.startsWith(u8, arg, "--") and !std.mem.eql(u8, arg, "--output") and !std.mem.eql(u8, arg, "--version") and !std.mem.eql(u8, arg, "--help")) {
-                try std.io.getStdErr().writer().print("Unknown argument: {s}\n\n", .{arg});
+                try StdWriters.err_writer.print("Unknown argument: {s}\n\n", .{arg});
                 usage();
             }
             if (std.mem.eql(u8, arg, "--help")) {
@@ -97,14 +100,15 @@ pub const Cmdline = struct {
             }
             if (std.mem.eql(u8, arg, "--version")) {
                 // Format version determines the major version number
-                try std.io.getStdOut().writer().print("stitch version {d}.0.0\n", .{Stitch.StitchVersion});
+                try StdWriters.out_writer.print("stitch version {d}.0.0\n", .{Stitch.StitchVersion});
+                try StdWriters.out_writer.flush();
                 std.process.exit(0);
             }
             if (std.mem.eql(u8, arg, "--output") or std.mem.eql(u8, arg, "-o")) {
                 if (arg_it.next()) |output| {
                     cmdline.output_file_path = output;
                     if (arg_it.next() != null) {
-                        try std.io.getStdErr().writer().print("The last argument must be --output <filename>", .{});
+                        try StdWriters.err_writer.print("The last argument must be --output <filename>", .{});
                         usage();
                     }
                     break;
@@ -123,7 +127,7 @@ pub const Cmdline = struct {
         }
 
         if (cmdline.input_files_paths.count() < 2) {
-            try std.io.getStdErr().writer().print("At least two input files are required\n", .{});
+            try StdWriters.err_writer.print("At least two input files are required\n", .{});
             usage();
         }
 
@@ -132,5 +136,27 @@ pub const Cmdline = struct {
         }
 
         return cmdline;
+    }
+};
+
+pub const StdWriters = struct {
+    pub var out_writer: *std.Io.Writer = undefined;
+    pub var err_writer: *std.Io.Writer = undefined;
+    pub var out_buffer: [1024]u8 = undefined;
+    pub var out_file_writer: std.fs.File.Writer = undefined;
+    pub var err_file_writer: std.fs.File.Writer = undefined;
+    var initialized: bool = false;
+
+    pub fn initIdempotent() void {
+        if (!initialized) {
+            out_file_writer = std.fs.File.stdout().writer(&out_buffer);
+            out_writer = &out_file_writer.interface;
+
+            // stderr is unbuffered, no flushing required
+            err_file_writer = std.fs.File.stderr().writer(&.{});
+            err_writer = &err_file_writer.interface;
+
+            initialized = true;
+        }
     }
 };

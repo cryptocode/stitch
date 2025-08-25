@@ -33,7 +33,11 @@ test "append resources to new file and read them back" {
 
         var file = try std.fs.cwd().openFile(".stitch/three.txt", .{});
         defer file.close();
-        _ = try writer.addResourceFromReader("from-reader", file.reader());
+
+        var buf: [1024]u8 = undefined;
+        var file_reader = file.reader(&buf);
+        const reader = &file_reader.interface;
+        _ = try writer.addResourceFromReader("from-reader", reader);
         _ = try writer.addResourceFromSlice(".stitch/two.txt", "Hello world");
         try writer.commit();
     }
@@ -55,7 +59,7 @@ test "append resources to new file and read them back" {
 
         // Test reading a resource through a reader
         var rr = try reader.getResourceReader(two_index);
-        data = try rr.reader().readAllAlloc(allocator, std.math.maxInt(u64));
+        data = try rr.readResourceOwned(allocator);
         try std.testing.expectEqualSlices(u8, data, "Hello\nWorld");
     }
 }
@@ -113,7 +117,7 @@ test "read invalid exe, too small" {
         {
             var file = try std.fs.cwd().createFile(random_name, .{});
             defer file.close();
-            try file.writer().print("abc", .{});
+            try file.writeAll("abc");
         }
         try std.testing.expectError(StitchError.InvalidExecutableFormat, Stitch.initReader(arena.allocator(), random_name));
     }
@@ -126,7 +130,7 @@ test "read invalid exe, too small" {
         {
             var file = try std.fs.cwd().createFile(random_name, .{});
             defer file.close();
-            try file.writer().print("1234567890123456712345678901234567", .{});
+            try file.writeAll("1234567890123456712345678901234567");
         }
         try std.testing.expectError(StitchError.InvalidExecutableFormat, Stitch.initReader(arena.allocator(), random_name));
     }

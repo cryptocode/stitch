@@ -58,7 +58,7 @@ const Resource = struct {
     data: union(ResourceType) {
         bytes: []const u8,
         path: []const u8,
-        reader: std.fs.File.Reader,
+        reader: *std.Io.Reader,
     },
 };
 
@@ -214,8 +214,8 @@ pub const StitchWriter = struct {
         return .{
             .session = session,
             .exe = .{
-                .resources = std.ArrayList(Resource).init(session.arena.allocator()),
-                .index = .{ .entries = std.ArrayList(IndexEntry).init(session.arena.allocator()) },
+                .resources = std.ArrayList(Resource).empty,
+                .index = .{ .entries = std.ArrayList(IndexEntry).empty },
                 .tail = .{ .index_offset = 0, .version = 0, .eof_magic = EofMagic },
             },
         };
@@ -242,17 +242,20 @@ pub const StitchWriter = struct {
     fn commitImpl(writer: *StitchWriter) !void {
         writer.session.resetDiagnostics();
         var outfile = writer.session.output_exe_file orelse writer.session.org_exe_file;
-        var buffered_writer = std.io.bufferedWriter(outfile.writer());
-        var counting_writer = std.io.countingWriter(buffered_writer.writer());
-        var stream = counting_writer.writer();
+        var out_buff: [4096]u8 = undefined;
+        var file_writer = outfile.writer(&out_buff);
+        var stream = &file_writer.interface;
 
         // Write original executable if we're not stitching to the original, otherwise seek to the end of original
         if (writer.session.output_exe_file != null) {
-            var buffered_reader = std.io.bufferedReader(writer.session.org_exe_file.reader());
-            try copyBytes(buffered_reader.reader(), buffered_writer.writer());
+            var rbuf: [4096]u8 = undefined;
+            var r = writer.session.org_exe_file.reader(&rbuf);
+            const ri = &r.interface;
+
+            _ = try ri.streamRemaining(stream);
 
             // Flush to ensure the file length is correct when queried
-            try buffered_writer.flush();
+            try stream.flush();
         } else {
             try outfile.seekFromEnd(0);
         }
@@ -262,30 +265,29 @@ pub const StitchWriter = struct {
             try stream.writeInt(u64, 0, .big);
             try stream.writeByte(StitchVersion);
             try stream.writeInt(u64, EofMagic, .big);
-            try buffered_writer.flush();
+            try stream.flush();
             return;
         }
 
-        // This is zero if we're writing not stitching to the original.
-        // In that case, we set this when we know the length of the first input (which must be the executable)
-        const exe_file_len = try outfile.getEndPos();
+        const arena_allocator = writer.session.arena.allocator();
 
         // Keeps track of offsets relative to the end of th original executable
         // This is used to compute resource indices
-        var resource_offsets = std.ArrayList(u64).init(writer.session.arena.allocator());
-        try resource_offsets.append(exe_file_len);
-        var resource_lengths = std.ArrayList(u64).init(writer.session.arena.allocator());
+        var resource_offsets = std.ArrayList(u64).empty;
+        var resource_lengths = std.ArrayList(u64).empty;
 
         // Append resources, each prefixed with resource magic
         for (writer.exe.resources.items) |*item| {
-            const written_before = counting_writer.bytes_written;
+            const before_pos = file_writer.pos;
+            try resource_offsets.append(arena_allocator, before_pos);
+
             try stream.writeInt(u64, ResourceMagic, .big);
             switch (item.data) {
                 .bytes => {
                     try stream.writeAll(item.data.bytes);
                 },
                 .reader => {
-                    try copyBytes(item.data.reader, stream);
+                    _ = try item.data.reader.streamRemaining(stream);
                 },
                 .path => {
                     var file = std.fs.cwd().openFile(item.data.path, .{ .mode = .read_only }) catch |err| switch (err) {
@@ -296,14 +298,21 @@ pub const StitchWriter = struct {
                         else => return err,
                     };
                     defer file.close();
-                    try copyBytes(file.reader(), stream);
+
+                    var rbuf: [4096]u8 = undefined;
+                    var r = file.reader(&rbuf);
+                    const ri = &r.interface;
+                    _ = try ri.streamRemaining(stream);
                 },
             }
-            try resource_offsets.append(exe_file_len + counting_writer.bytes_written);
-            try resource_lengths.append(counting_writer.bytes_written - written_before - 8);
+
+            // Flush to update position, then compute and write the length of the resource
+            try stream.flush();
+            try resource_lengths.append(arena_allocator, file_writer.pos - before_pos - 8);
         }
 
-        const index_offset = exe_file_len + counting_writer.bytes_written;
+        try stream.flush();
+        const index_offset = file_writer.pos;
 
         // Write the index
         try stream.writeInt(u64, writer.exe.index.entries.items.len, .big);
@@ -320,20 +329,7 @@ pub const StitchWriter = struct {
         try stream.writeInt(u64, index_offset, .big);
         try stream.writeByte(StitchVersion);
         try stream.writeInt(u64, EofMagic, .big);
-        try buffered_writer.flush();
-    }
-
-    // Copy bytes from a reader to a writer, until EOF
-    fn copyBytes(reader: anytype, writer: anytype) !void {
-        var buffered_reader = std.io.bufferedReader(reader);
-        var instream = buffered_reader.reader();
-        read_loop: while (true) {
-            const byte = instream.readByte() catch |err| switch (err) {
-                error.EndOfStream => break :read_loop,
-                else => return err,
-            };
-            try writer.writeByte(byte);
-        }
+        try stream.flush();
     }
 
     /// Set the scratch bytes for a resource, using the index returned by the addResource... functions.
@@ -352,9 +348,10 @@ pub const StitchWriter = struct {
     /// If name is null, the name of the resource will be the basename of the path
     /// Returns the zero-based resource index
     pub fn addResourceFromPath(writer: *StitchWriter, name: ?[]const u8, path: []const u8) !u64 {
+        const arena_allocator = writer.session.arena.allocator();
         writer.session.resetDiagnostics();
-        try writer.exe.resources.append(Resource{ .magic = ResourceMagic, .data = .{ .path = path } });
-        try writer.exe.index.entries.append(IndexEntry{
+        try writer.exe.resources.append(arena_allocator, Resource{ .magic = ResourceMagic, .data = .{ .path = path } });
+        try writer.exe.index.entries.append(arena_allocator, IndexEntry{
             .name = if (name != null) name.? else std.fs.path.basename(path),
             .resource_type = 0,
             .resource_offset = 0,
@@ -369,10 +366,12 @@ pub const StitchWriter = struct {
     /// This option has minimal memory overhead
     /// The reader must stay valid until the the Stitch session is closed
     /// Returns the zero-based resource index
-    pub fn addResourceFromReader(writer: *StitchWriter, name: []const u8, reader: std.fs.File.Reader) !u64 {
+    pub fn addResourceFromReader(writer: *StitchWriter, name: []const u8, reader: *std.Io.Reader) !u64 {
         writer.session.resetDiagnostics();
-        try writer.exe.resources.append(Resource{ .magic = ResourceMagic, .data = .{ .reader = reader } });
-        try writer.exe.index.entries.append(IndexEntry{
+
+        const arena_allocator = writer.session.arena.allocator();
+        try writer.exe.resources.append(arena_allocator, Resource{ .magic = ResourceMagic, .data = .{ .reader = reader } });
+        try writer.exe.index.entries.append(arena_allocator, IndexEntry{
             .name = name,
             .resource_type = 0,
             .resource_offset = 0,
@@ -388,8 +387,10 @@ pub const StitchWriter = struct {
     /// Returns the zero-based resource index
     pub fn addResourceFromSlice(writer: *StitchWriter, name: []const u8, data: []const u8) !u64 {
         writer.session.resetDiagnostics();
-        try writer.exe.resources.append(Resource{ .magic = ResourceMagic, .data = .{ .bytes = data } });
-        try writer.exe.index.entries.append(IndexEntry{
+
+        const arena_allocator = writer.session.arena.allocator();
+        try writer.exe.resources.append(arena_allocator, Resource{ .magic = ResourceMagic, .data = .{ .bytes = data } });
+        try writer.exe.index.entries.append(arena_allocator, IndexEntry{
             .name = name,
             .resource_type = 0,
             .resource_offset = 0,
@@ -405,29 +406,22 @@ pub const StitchWriter = struct {
 /// and returning EOF if reading beyond the end of the resource.
 /// Use `StitchReader.getResourceReader` to create this reader.
 pub const StitchResourceReader = struct {
-    underlying_file: std.fs.File,
+    file: std.fs.File,
     offset: u64,
-    limited_reader: std.io.LimitedReader(std.fs.File.Reader),
+    length: u64 = 0,
     has_read_yet: bool = false,
 
-    pub const FileError = std.fs.File.Reader.Error || std.fs.File.SeekError;
-    pub const Reader = std.io.Reader(*StitchResourceReader, FileError, read);
-
-    pub fn read(self: *StitchResourceReader, dest: []u8) FileError!usize {
-        if (!self.has_read_yet) {
-            self.has_read_yet = true;
-            try self.underlying_file.seekTo(self.offset);
-        }
-        return self.limited_reader.read(dest);
-    }
-
-    pub fn reader(self: *StitchResourceReader) Reader {
-        return .{ .context = self };
+    pub fn readResourceOwned(self: *StitchResourceReader, allocator: std.mem.Allocator) ![]const u8 {
+        var buff: [4096]u8 = undefined;
+        var r = self.file.reader(&buff);
+        r.pos = self.offset;
+        const ri = &r.interface;
+        return try ri.readAlloc(allocator, self.length);
     }
 };
 
-fn stitchResourceReader(underlying_file: std.fs.File, offset: u64, bytes_left: u64) StitchResourceReader {
-    return .{ .underlying_file = underlying_file, .offset = offset, .limited_reader = std.io.limitedReader(underlying_file.reader(), bytes_left) };
+fn stitchResourceReader(file: std.fs.File, offset: u64, length: u64) StitchResourceReader {
+    return .{ .offset = offset, .file = file, .length = length };
 }
 
 /// Use `initReader` to create this reader, which allows you to read resources from a stitch file.
@@ -439,8 +433,8 @@ pub const StitchReader = struct {
         return .{
             .session = session,
             .exe = .{
-                .resources = std.ArrayList(Resource).init(session.arena.allocator()),
-                .index = .{ .entries = std.ArrayList(IndexEntry).init(session.arena.allocator()) },
+                .resources = std.ArrayList(Resource).empty,
+                .index = .{ .entries = std.ArrayList(IndexEntry).empty },
                 .tail = .{ .index_offset = 0, .version = 0, .eof_magic = EofMagic },
             },
         };
@@ -460,11 +454,14 @@ pub const StitchReader = struct {
         }
 
         // Read the tail
-        try reader.session.org_exe_file.seekFromEnd(-17);
-        var in = reader.session.org_exe_file.reader();
-        const index_offset = try in.readInt(u64, .big);
-        reader.exe.tail.version = try in.readByte();
-        reader.exe.tail.eof_magic = try in.readInt(u64, .big);
+        var read_buffer: [8]u8 = undefined;
+        var exe_reader = reader.session.org_exe_file.reader(&read_buffer);
+        exe_reader.pos = try reader.session.org_exe_file.getEndPos() - 17;
+        var in = &exe_reader.interface;
+
+        const index_offset = try in.takeInt(u64, .big);
+        reader.exe.tail.version = try in.takeByte();
+        reader.exe.tail.eof_magic = try in.takeInt(u64, .big);
         if (reader.exe.tail.eof_magic != EofMagic) {
             reader.session.diagnostics = .{ .InvalidExecutableFormat = "Invalid stitch EOF magic" };
             return StitchError.InvalidExecutableFormat;
@@ -475,26 +472,26 @@ pub const StitchReader = struct {
 
         // Seek to the index, and read it
         var ally = reader.session.arena.allocator();
-        try reader.session.org_exe_file.seekTo(index_offset);
-        const entry_count = try in.readInt(u64, .big);
+        exe_reader.pos = index_offset;
+        const entry_count = try in.takeInt(u64, .big);
         for (0..entry_count) |_| {
-            const name_len = try in.readInt(u64, .big);
+            const name_len = try in.takeInt(u64, .big);
             const name: []const u8 = _: {
                 if (name_len == 0) break :_ "";
                 const buffer = try ally.alloc(u8, name_len);
-                _ = try in.readAll(buffer);
+                _ = try in.readSliceAll(buffer);
                 break :_ buffer;
             };
-            const resource_type = try in.readByte();
-            const resource_offset = try in.readInt(u64, .big);
-            const byte_length = try in.readInt(u64, .big);
+            const resource_type = try in.takeByte();
+            const resource_offset = try in.takeInt(u64, .big);
+            const byte_length = try in.takeInt(u64, .big);
             const scratch_bytes = _: {
                 const buffer = try ally.alloc(u8, 8);
-                _ = try in.readAll(buffer);
+                _ = try in.readSliceAll(buffer);
                 break :_ buffer;
             };
 
-            try reader.exe.index.entries.append(IndexEntry{
+            try reader.exe.index.entries.append(reader.session.arena.allocator(), IndexEntry{
                 .name = name,
                 .resource_type = resource_type,
                 .resource_offset = resource_offset,
@@ -539,21 +536,18 @@ pub const StitchReader = struct {
             return StitchError.ResourceNotFound;
         }
 
-        var ally = reader.session.arena.allocator();
+        var arena_allocator = reader.session.arena.allocator();
 
         // Get the offset from the index and read the resource
         const offset = reader.exe.index.entries.items[resource_index].resource_offset;
         const length = reader.exe.index.entries.items[resource_index].byte_length;
 
-        // Seek to the resource and read it
-        reader.session.org_exe_file.seekTo(offset) catch {
-            reader.session.diagnostics = .{ .IoError = "Failed to seek to resource" };
-            return StitchError.IoError;
-        };
+        var buffer: [4096]u8 = undefined;
+        var freader = reader.session.org_exe_file.reader(&buffer);
+        var file_reader = &freader.interface;
+        freader.pos = offset;
 
-        var file_reader = reader.session.org_exe_file.reader();
-
-        const resource_magic = file_reader.readInt(u64, .big) catch {
+        const resource_magic = file_reader.takeInt(u64, .big) catch {
             reader.session.diagnostics = .{ .IoError = "Failed to read resource magic" };
             return StitchError.IoError;
         };
@@ -563,12 +557,12 @@ pub const StitchReader = struct {
             return StitchError.InvalidExecutableFormat;
         }
 
-        const buffer = try ally.alloc(u8, length);
-        _ = file_reader.readAll(buffer) catch {
+        const all_buffer = try arena_allocator.alloc(u8, length);
+        _ = file_reader.readSliceAll(all_buffer) catch {
             reader.session.diagnostics = .{ .IoError = "Failed to read resource bytes" };
             return StitchError.IoError;
         };
-        return buffer;
+        return all_buffer;
     }
 
     /// Returns a file reader for the resource. The reader is closed when the session is closed.
@@ -584,12 +578,12 @@ pub const StitchReader = struct {
         const offset = reader.exe.index.entries.items[resource_index].resource_offset;
         const length = reader.exe.index.entries.items[resource_index].byte_length;
 
-        reader.session.org_exe_file.seekTo(offset) catch {
-            reader.session.diagnostics = .{ .IoError = "Failed to seek to resource" };
-            return StitchError.IoError;
-        };
-        var file_reader = reader.session.org_exe_file.reader();
-        const resource_magic = file_reader.readInt(u64, .big) catch {
+        var buf: [8]u8 = undefined;
+        var freader = reader.session.org_exe_file.reader(&buf);
+        freader.pos = offset;
+        const file_reader = &freader.interface;
+
+        const resource_magic = file_reader.takeInt(u64, .big) catch {
             reader.session.diagnostics = .{ .IoError = "Failed to read resource magic" };
             return StitchError.IoError;
         };
@@ -634,10 +628,11 @@ pub fn readEntireFile(session: *Self, path: []const u8) StitchError![]const u8 {
     const absolute_path = std.fs.realpathAlloc(arena_allocator, path) catch return StitchError.IoError;
     var file = std.fs.openFileAbsolute(absolute_path, .{ .mode = .read_write }) catch return StitchError.IoError;
     defer file.close();
-    var reader = file.reader();
+    var file_reader = file.reader(&.{});
+    var reader = &file_reader.interface;
     const file_size = file.getEndPos() catch return StitchError.IoError;
     const buffer = arena_allocator.alloc(u8, file_size) catch return StitchError.IoError;
-    _ = reader.readAll(buffer) catch return StitchError.IoError;
+    _ = reader.readSliceAll(buffer) catch return StitchError.IoError;
     return buffer;
 }
 
@@ -653,22 +648,34 @@ pub fn testSetup() !void {
     {
         var file = try std.fs.cwd().createFile(".stitch/executable", .{});
         defer file.close();
-        try file.writer().print("Executable bytes goes here", .{});
+
+        var file_writer = file.writer(&.{});
+        const writer = &file_writer.interface;
+        try writer.writeAll("Executable bytes goes here");
     }
     {
         var file = try std.fs.cwd().createFile(".stitch/one.txt", .{});
         defer file.close();
-        try file.writer().print("Hello world", .{});
+
+        var file_writer = file.writer(&.{});
+        const writer = &file_writer.interface;
+        try writer.writeAll("Hello world");
     }
     {
         var file = try std.fs.cwd().createFile(".stitch/two.txt", .{});
         defer file.close();
-        try file.writer().print("Hello\nWorld", .{});
+
+        var file_writer = file.writer(&.{});
+        const writer = &file_writer.interface;
+        try writer.writeAll("Hello\nWorld");
     }
     {
         var file = try std.fs.cwd().createFile(".stitch/three.txt", .{});
         defer file.close();
-        try file.writer().print("A third file", .{});
+
+        var file_writer = file.writer(&.{});
+        const writer = &file_writer.interface;
+        try writer.writeAll("A third file");
     }
 }
 
@@ -694,7 +701,7 @@ pub fn generateUniqueFileName(allocator: std.mem.Allocator) ![]const u8 {
 
     // Allocate enough for the hex string, plus the ".tmp" suffix
     const buf = try allocator.alloc(u8, output.len * 2 + 4);
-    return std.fmt.bufPrint(buf, "{s}.tmp", .{std.fmt.fmtSliceHexLower(&output)});
+    return std.fmt.bufPrint(buf, "{x}.tmp", .{output});
 }
 
 /// C ABI exported interface. See stitch.h for function-level documentation.
@@ -705,7 +712,7 @@ pub fn generateUniqueFileName(allocator: std.mem.Allocator) ![]const u8 {
 /// To interact with stich from C, a writer or reader session must be created.
 /// All returned data is owned by the session. Copy any data you need to keep after the session is closed,
 /// or keep the session open until you are done with the data.
-pub export fn stitch_init_writer(input_executable_path: ?[*:0]const u8, output_executable_path: ?[*:0]const u8, error_code: *u64) callconv(.C) ?*anyopaque {
+pub export fn stitch_init_writer(input_executable_path: ?[*:0]const u8, output_executable_path: ?[*:0]const u8, error_code: *u64) callconv(.c) ?*anyopaque {
     error_code.* = 0;
     if (input_executable_path == null) {
         error_code.* = translateError(StitchError.CouldNotOpenInputFile);
@@ -719,7 +726,7 @@ pub export fn stitch_init_writer(input_executable_path: ?[*:0]const u8, output_e
     return writer.session;
 }
 
-pub export fn stitch_init_reader(executable_path: ?[*:0]const u8, error_code: *u64) callconv(.C) ?*anyopaque {
+pub export fn stitch_init_reader(executable_path: ?[*:0]const u8, error_code: *u64) callconv(.c) ?*anyopaque {
     error_code.* = 0;
     if (executable_path == null) {
         error_code.* = translateError(StitchError.CouldNotOpenInputFile);
@@ -733,33 +740,33 @@ pub export fn stitch_init_reader(executable_path: ?[*:0]const u8, error_code: *u
     return reader.session;
 }
 
-pub export fn stitch_deinit(session: *anyopaque) callconv(.C) void {
+pub export fn stitch_deinit(session: *anyopaque) callconv(.c) void {
     fromC(session).deinit();
 }
 
-pub export fn stitch_reader_get_resource_count(reader: *anyopaque) callconv(.C) u64 {
+pub export fn stitch_reader_get_resource_count(reader: *anyopaque) callconv(.c) u64 {
     return fromC(reader).rw.reader.getResourceCount();
 }
 
-pub export fn stitch_reader_get_format_version(reader: *anyopaque) callconv(.C) u8 {
+pub export fn stitch_reader_get_format_version(reader: *anyopaque) callconv(.c) u8 {
     return fromC(reader).rw.reader.getFormatVersion();
 }
 
-pub export fn stitch_reader_get_resource_index(reader: *anyopaque, name: [*:0]const u8, error_code: *u64) callconv(.C) u64 {
+pub export fn stitch_reader_get_resource_index(reader: *anyopaque, name: [*:0]const u8, error_code: *u64) callconv(.c) u64 {
     return fromC(reader).rw.reader.getResourceIndex(std.mem.span(name)) catch |err| {
         error_code.* = translateError(err);
         return std.math.maxInt(u64);
     };
 }
 
-pub export fn stitch_reader_get_resource_byte_len(reader: *anyopaque, resource_index: u64, error_code: *u64) callconv(.C) u64 {
+pub export fn stitch_reader_get_resource_byte_len(reader: *anyopaque, resource_index: u64, error_code: *u64) callconv(.c) u64 {
     return fromC(reader).rw.reader.getResourceSize(resource_index) catch |err| {
         error_code.* = translateError(err);
         return std.math.maxInt(u64);
     };
 }
 
-pub export fn stitch_reader_get_resource_bytes(reader: *anyopaque, resource_index: u64, error_code: *u64) callconv(.C) ?[*]const u8 {
+pub export fn stitch_reader_get_resource_bytes(reader: *anyopaque, resource_index: u64, error_code: *u64) callconv(.c) ?[*]const u8 {
     const slice = fromC(reader).rw.reader.getResourceAsSlice(resource_index) catch |err| {
         error_code.* = translateError(err);
         return null;
@@ -767,7 +774,7 @@ pub export fn stitch_reader_get_resource_bytes(reader: *anyopaque, resource_inde
     return slice.ptr;
 }
 
-pub export fn stitch_reader_get_scratch_bytes(reader: *anyopaque, resource_index: u64, error_code: *u64) callconv(.C) ?[*]const u8 {
+pub export fn stitch_reader_get_scratch_bytes(reader: *anyopaque, resource_index: u64, error_code: *u64) callconv(.c) ?[*]const u8 {
     error_code.* = 0;
     const slice = fromC(reader).rw.reader.getScratchBytes(resource_index) catch |err| {
         error_code.* = translateError(err);
@@ -776,33 +783,33 @@ pub export fn stitch_reader_get_scratch_bytes(reader: *anyopaque, resource_index
     return slice.ptr;
 }
 
-pub export fn stitch_writer_commit(writer: *anyopaque, error_code: *u64) callconv(.C) void {
+pub export fn stitch_writer_commit(writer: *anyopaque, error_code: *u64) callconv(.c) void {
     fromC(writer).rw.writer.commit() catch |err| {
         error_code.* = translateError(err);
     };
 }
 
-pub export fn stitch_writer_add_resource_from_path(writer: *anyopaque, name: [*:0]const u8, path: [*:0]const u8, error_code: *u64) callconv(.C) u64 {
+pub export fn stitch_writer_add_resource_from_path(writer: *anyopaque, name: [*:0]const u8, path: [*:0]const u8, error_code: *u64) callconv(.c) u64 {
     return fromC(writer).rw.writer.addResourceFromPath(std.mem.span(name), std.mem.span(path)) catch |err| {
         error_code.* = translateError(err);
         return std.math.maxInt(u64);
     };
 }
 
-pub export fn stitch_writer_add_resource_from_bytes(writer: *anyopaque, name: [*:0]const u8, bytes: [*]const u8, len: usize, error_code: *u64) callconv(.C) u64 {
+pub export fn stitch_writer_add_resource_from_bytes(writer: *anyopaque, name: [*:0]const u8, bytes: [*]const u8, len: usize, error_code: *u64) callconv(.c) u64 {
     return fromC(writer).rw.writer.addResourceFromSlice(std.mem.span(name), bytes[0..len]) catch |err| {
         error_code.* = translateError(err);
         return std.math.maxInt(u64);
     };
 }
 
-pub export fn stitch_writer_set_scratch_bytes(writer: *anyopaque, resource_index: u64, bytes: [*]const u8, error_code: *u64) callconv(.C) void {
+pub export fn stitch_writer_set_scratch_bytes(writer: *anyopaque, resource_index: u64, bytes: [*]const u8, error_code: *u64) callconv(.c) void {
     fromC(writer).rw.writer.setScratchBytes(resource_index, bytes[0..8].*) catch |err| {
         error_code.* = translateError(err);
     };
 }
 
-pub export fn stitch_read_entire_file(reader_or_writer: *anyopaque, path: [*:0]const u8, error_code: *u64) callconv(.C) ?[*]const u8 {
+pub export fn stitch_read_entire_file(reader_or_writer: *anyopaque, path: [*:0]const u8, error_code: *u64) callconv(.c) ?[*]const u8 {
     const s = fromC(reader_or_writer);
     switch (s.rw) {
         inline else => |rw| {
@@ -816,7 +823,7 @@ pub export fn stitch_read_entire_file(reader_or_writer: *anyopaque, path: [*:0]c
     return null;
 }
 
-pub export fn stitch_get_last_error_diagnostic(session: ?*anyopaque) callconv(.C) ?[*:0]const u8 {
+pub export fn stitch_get_last_error_diagnostic(session: ?*anyopaque) callconv(.c) ?[*:0]const u8 {
     if (session == null) return "Could not get diagnostic: Invalid session";
     var s = fromC(session.?);
     if (s.getDiagnostics()) |d| {
@@ -825,7 +832,7 @@ pub export fn stitch_get_last_error_diagnostic(session: ?*anyopaque) callconv(.C
     } else return null;
 }
 
-pub export fn stitch_get_error_diagnostic(error_code: u64) callconv(.C) ?[*:0]const u8 {
+pub export fn stitch_get_error_diagnostic(error_code: u64) callconv(.c) ?[*:0]const u8 {
     switch (error_code) {
         2 => return "Output file already exists",
         3 => return "Could not open input file",
@@ -837,11 +844,11 @@ pub export fn stitch_get_error_diagnostic(error_code: u64) callconv(.C) ?[*:0]co
     }
 }
 
-pub export fn stitch_test_setup() callconv(.C) void {
+pub export fn stitch_test_setup() callconv(.c) void {
     testSetup() catch unreachable;
 }
 
-pub export fn stitch_test_teardown() callconv(.C) void {
+pub export fn stitch_test_teardown() callconv(.c) void {
     testTeardown();
 }
 

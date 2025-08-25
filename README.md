@@ -19,8 +19,8 @@ Resoures can be anything, such as scripts, images, text, templates config files 
 * An image in your own format that's able to display itself when executed
 
 ## Building the project
-To build with Zig 0.13, use the `zig-<version>` tag/release.
-To build with Zig 0.14 or master, use the main branch (last tested with Zig version `0.15.0-dev.11+5c57e90ff`)
+To build with a specific Zig version, use the `zig-<version>` tag.
+To build with Zig master, use the main branch.
 
 `zig build` will put a `bin` and `lib` directory in your output folder (e.g. zig-out)
 
@@ -47,6 +47,7 @@ stitch ./mylisp std=std.lisp fibonacci=fib.lisp --output fib
 If a name is not given, the filename (without path) is used. The stitch library supports finding resources by name or index.
 
 The `--output` flag is optional. By default, resources are added to the original executable (first argument)
+
 ## Stitching programmatically
 Let's say you want your interpreted programming language to support producing binaries.
 
