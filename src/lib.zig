@@ -257,7 +257,7 @@ pub const StitchWriter = struct {
             // Flush to ensure the file length is correct when queried
             try stream.flush();
         } else {
-            try outfile.seekFromEnd(0);
+            file_writer.pos = try outfile.getEndPos();
         }
 
         // No resources = write empty tail
