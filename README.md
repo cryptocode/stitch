@@ -1,16 +1,12 @@
 <img align="right" height="120" src="https://user-images.githubusercontent.com/34946442/232327201-294224c2-8502-423b-b2cb-663ca88ccfc1.png">
 
-<img src="https://user-images.githubusercontent.com/34946442/230613201-60de5adc-6304-4f18-84d9-d36bb46fdc1f.svg" width="24" height="24">&nbsp;
-<img src="https://user-images.githubusercontent.com/34946442/230613198-ca5c938a-613b-412f-8d97-8ce8f19aeb1f.svg" width="24" height="24">&nbsp;
-<img src="https://user-images.githubusercontent.com/34946442/230613203-858cb471-2859-4e6e-8ef9-61b03c36c085.svg" width="24" height="24">
-
 Stitch is a tool and library for Zig and C for adding and retrieving resources to and from executables.
 
 Why not just use `@embedFile` / `#embed`? Stitch serves a different purpose, namely to let build systems, and *users* of your software, create self-contained executables.
 
 For example, instead of requiring users to install an interpreter and execute `mylisp fib.lisp`, they can simply run `./fib` or `fib.exe`
 
-Resoures can be anything, such as scripts, images, text, templates config files and other executables.
+Resources can be anything, such as scripts, images, text, templates, config files, and other executables.
 
 ## Some use cases
 * Self extracting tools, like an installer
@@ -22,10 +18,10 @@ Resoures can be anything, such as scripts, images, text, templates config files 
 To build with a specific Zig version, use the `zig-<version>` tag.
 To build with Zig master, use the main branch.
 
-`zig build` will put a `bin` and `lib` directory in your output folder (e.g. zig-out)
+`zig build` will put a `bin` and `lib` directory in your output folder (for example `zig-out`)
 
-* bin/stitch is a standalone tool for attaching resources to executables. This can also be done programmatically using the library
-* lib/libstitch is a library for reading attached resources from the current executable, and for adding resources to executables (like the standalone tool)
+* `bin/stitch` is a standalone tool for attaching resources to executables. This can also be done programmatically using the library.
+* `lib/libstitch` is a library for reading attached resources from the current executable, and for adding resources to executables like the standalone tool.
 
 ## Using the tool
 
@@ -38,15 +34,15 @@ stitch ./mylisp std.lisp fib.lisp --output fib
 21
 ```
 
-Resources can be named explicitly
+Resources can be named explicitly:
 
 ```bash
 stitch ./mylisp std=std.lisp fibonacci=fib.lisp --output fib
 ```
 
-If a name is not given, the filename (without path) is used. The stitch library supports finding resources by name or index.
+If a name is not given, the basename of the input path is used. The stitch library supports finding resources by name or index.
 
-The `--output` flag is optional. By default, resources are added to the original executable (first argument)
+The `--output` flag is optional. If it is omitted, resources are added to the original executable in place.
 
 ## Stitching programmatically
 Let's say you want your interpreted programming language to support producing binaries.
@@ -76,8 +72,10 @@ zig build-exe c-api/test/c-test.c -Lzig-out/lib -lstitch -Ic-api/include
 ./c-test
 ```
 
+To read resources from the currently running executable, call `stitch_init_reader(NULL, &error_code)`.
+
 ## Binary layout
 
-The binary layout specification can be used by other tools that wants to parse files produced by Stitch, without using the Stitch library.
+The binary layout specification can be used by other tools that want to parse files produced by Stitch without using the Stitch library.
 
 [Specification](spec/README.md)

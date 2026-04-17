@@ -6,7 +6,7 @@ Format version: 1
 
 This specification can be used by tools to parse and create Stitch executables, without using the Stitch library.
 
-Resources and metadata are appended to the end of the original executable, according to the specification below.
+Resources and metadata are appended to the end of the executable bytes, according to the specification below.
 
 Backwards- and forwards compatibility is guaranteed as long as the *eof-magic* is recognized: older parsers will be able to read what they understand from newer format versions, and newer parsers will fully understand older format versions. Any features breaking this guarantee will essentially be a new format, with a new *eof-magic*
 
@@ -44,7 +44,8 @@ request by zero-based resource index or resource name.
 * *version* is currently the value 1
 * *eof-magic* indicates that this is a Stitch-compliant executable
 * *resource-magic* is a marker to help tools verify the that the layout is correct
-* *resource-type* is currently the value 1, denoting "blob". This field may gain additional values in the future, to support backwards- and forwards compatibility.
+* *resource-type* is currently the value 1, denoting opaque resource bytes. This field may gain additional values in the future, to support backwards- and forwards compatibility.
+* *resource-offset* points to the start of the `resource-magic` field for that resource.
 * *scratch-bytes* are 8 freely available bytes, whose interpretation is up to the application. If not set by the application, this field will be initialized to all-zeros. The field can be used for things like file types, permissions, etc. Additional metadata can be prepended manually in the resource.
 * *u64be* mean 64-bit integer written in big endian format. Big-endian is used for 3 reasons: a) it's the defacto standard for binary formats, b) it makes debugging outputs easier, c) it prevents buggy implementation assuming native == little (as most systems are little endian)
 * Resources are guaranteed to be added in same order as the API calls for adding resources

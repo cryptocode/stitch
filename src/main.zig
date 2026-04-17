@@ -4,20 +4,22 @@ const Stitch = @import("stitch");
 const StitchError = Stitch.StitchError;
 
 /// The stitch command-line tool, implemented using the stitch library
-pub fn main() !u8 {
-    StdWriters.initIdempotent();
+pub fn main(init: std.process.Init) !u8 {
+    StdWriters.initIdempotent(init.io);
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa = std.heap.DebugAllocator(.{ .safety = true }){};
     defer _ = gpa.deinit();
     const backing_allocator = gpa.allocator();
     var arena = std.heap.ArenaAllocator.init(backing_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const cmdline = try Cmdline.parseArgs(allocator);
+    const args = try init.minimal.args.toSlice(allocator);
+    var args_iter = ArgsIterator{ .args = args };
+    const cmdline = try Cmdline.parseArgs(&args_iter, allocator);
 
     // Create a stitcher
-    var stitcher = Stitch.initWriter(backing_allocator, cmdline.input_files_paths.values()[0], cmdline.output_file_path) catch |err| {
+    var stitcher = Stitch.initWriter(init.io, backing_allocator, cmdline.input_files_paths.values()[0], cmdline.output_file_path) catch |err| {
         switch (err) {
             StitchError.OutputFileAlreadyExists => {
                 try StdWriters.err_writer.print("Output file already exists: {s}\n", .{cmdline.output_file_path});
@@ -29,8 +31,8 @@ pub fn main() !u8 {
     defer stitcher.deinit();
 
     // Add resources as specified on the command line
-    for (cmdline.input_files_paths.values()[1..]) |path| {
-        _ = try stitcher.addResourceFromPath(null, path);
+    for (cmdline.input_files_paths.values()[1..], cmdline.input_files_paths.keys()[1..]) |path, name| {
+        _ = try stitcher.addResourceFromPath(name, path);
     }
 
     // Commit changes to file
@@ -40,6 +42,7 @@ pub fn main() !u8 {
         } else {
             try StdWriters.err_writer.print("Error: {s}\n", .{@errorName(err)});
         }
+        return 1;
     };
 
     return 0;
@@ -66,37 +69,35 @@ pub const Cmdline = struct {
     ;
 
     // Input files to stitch
-    input_files_paths: std.StringArrayHashMap([]const u8) = undefined,
+    input_files_paths: std.array_hash_map.String([]const u8) = undefined,
 
     // If not specified, the output file will be the same as the first input file
     output_file_path: []const u8 = "",
 
     /// Print usage
-    fn usage() noreturn {
+    fn usage(exit_code: u8) noreturn {
         StdWriters.out_writer.print(help, .{}) catch unreachable;
         StdWriters.out_writer.flush() catch unreachable;
-        std.process.exit(0);
+        std.process.exit(exit_code);
     }
 
     /// Loop through arguments and extract input files and output name
     /// The first input file is the binary onto which the rest of the files are stitched.
     /// Thus, at least two inputs must be given. The "--output <name>" argument is required
     /// and must appear at the end of the arguments.
-    fn parseArgs(allocator: std.mem.Allocator) !*Cmdline {
+    fn parseArgs(arg_it: *ArgsIterator, allocator: std.mem.Allocator) !*Cmdline {
         var cmdline = try allocator.create(Cmdline);
-        cmdline.* = .{ .input_files_paths = std.StringArrayHashMap([]const u8).init(allocator), .output_file_path = "" };
+        cmdline.* = .{ .input_files_paths = .empty, .output_file_path = "" };
 
-        var arg_it = try std.process.argsWithAllocator(allocator);
-        defer arg_it.deinit();
         if (!arg_it.skip()) @panic("Missing process argument");
 
         while (arg_it.next()) |arg| {
             if (std.mem.startsWith(u8, arg, "--") and !std.mem.eql(u8, arg, "--output") and !std.mem.eql(u8, arg, "--version") and !std.mem.eql(u8, arg, "--help")) {
                 try StdWriters.err_writer.print("Unknown argument: {s}\n\n", .{arg});
-                usage();
+                usage(1);
             }
             if (std.mem.eql(u8, arg, "--help")) {
-                usage();
+                usage(0);
             }
             if (std.mem.eql(u8, arg, "--version")) {
                 // Format version determines the major version number
@@ -109,9 +110,12 @@ pub const Cmdline = struct {
                     cmdline.output_file_path = output;
                     if (arg_it.next() != null) {
                         try StdWriters.err_writer.print("The last argument must be --output <filename>", .{});
-                        usage();
+                        usage(1);
                     }
                     break;
+                } else {
+                    try StdWriters.err_writer.print("Missing filename after --output\n", .{});
+                    usage(1);
                 }
             } else {
                 // The filename is stored in the index, so it can be found by name. By using name=path, an alternative name can be given
@@ -120,15 +124,14 @@ pub const Cmdline = struct {
                 const second = it.next();
                 const path = if (second != null) second.? else name.?;
                 name = if (second == null) std.fs.path.basename(path) else name;
-                std.debug.print("name: '{s}', path: '{s}'\n", .{ name.?, path });
 
-                try cmdline.input_files_paths.put(try allocator.dupe(u8, name.?), try allocator.dupe(u8, path));
+                try cmdline.input_files_paths.put(allocator, try allocator.dupe(u8, name.?), try allocator.dupe(u8, path));
             }
         }
 
         if (cmdline.input_files_paths.count() < 2) {
             try StdWriters.err_writer.print("At least two input files are required\n", .{});
-            usage();
+            usage(1);
         }
 
         if (cmdline.output_file_path.len == 0) {
@@ -139,23 +142,39 @@ pub const Cmdline = struct {
     }
 };
 
+const ArgsIterator = struct {
+    args: []const []const u8,
+    i: usize = 0,
+
+    fn next(it: *@This()) ?[]const u8 {
+        if (it.i >= it.args.len) {
+            return null;
+        }
+        defer it.i += 1;
+        return it.args[it.i];
+    }
+
+    fn skip(it: *@This()) bool {
+        return it.next() != null;
+    }
+};
+
 pub const StdWriters = struct {
     pub var out_writer: *std.Io.Writer = undefined;
     pub var err_writer: *std.Io.Writer = undefined;
     pub var out_buffer: [1024]u8 = undefined;
-    pub var out_file_writer: std.fs.File.Writer = undefined;
-    pub var err_file_writer: std.fs.File.Writer = undefined;
-    var initialized: bool = false;
+    pub var out_file_writer: std.Io.File.Writer = undefined;
+    pub var err_file_writer: std.Io.File.Writer = undefined;
+    pub var initialized: bool = false;
 
-    pub fn initIdempotent() void {
+    pub fn initIdempotent(io: std.Io) void {
         if (!initialized) {
-            out_file_writer = std.fs.File.stdout().writer(&out_buffer);
+            out_file_writer = std.Io.File.stdout().writer(io, &out_buffer);
             out_writer = &out_file_writer.interface;
 
             // stderr is unbuffered, no flushing required
-            err_file_writer = std.fs.File.stderr().writer(&.{});
+            err_file_writer = std.Io.File.stderr().writer(io, &.{});
             err_writer = &err_file_writer.interface;
-
             initialized = true;
         }
     }

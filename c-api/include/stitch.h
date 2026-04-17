@@ -15,7 +15,7 @@ extern "C" {
 // versions of the library.
 // Do not rely on return values for error checking; only check against `error_code`
 #define STITCH_SUCCESS 0
-#define STITCH_ERROR_UKNOWN 1
+#define STITCH_ERROR_UNKNOWN 1
 #define STITCH_ERROR_OUTPUT_FILE_ALREADY_EXISTS 2
 #define STITCH_ERROR_INPUT_FILE_COULD_NOT_OPEN 3
 #define STITCH_ERROR_OUTPUT_FILE_COULD_NOT_OPEN 4
@@ -89,7 +89,6 @@ uint64_t stitch_writer_add_resource_from_bytes(void* writer, const char* name, c
 // Set the scratch bytes for a resource, using the index returned by the add_resource... functions.
 // The length of `bytes` must be exactly 8 bytes.
 // The default scratch bytes is all-zero.
-// Returns true if the scratch bytes were set successfully, or false if an error occurs.
 void stitch_writer_set_scratch_bytes(void* writer, uint64_t resource_index, const char* bytes, uint64_t* error_code);
 
 // If an error is produced by an API function, the returned string is a human-readable diagnostic message,
